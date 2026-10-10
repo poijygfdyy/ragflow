@@ -140,7 +140,6 @@ func (s *NATSEventStore) Stream(ctx context.Context, filter EventFilter) EventIt
 		consumer: consumer,
 		ctx:      ctx,
 		filter:   filter,
-		buffer:   make([]*Event, 0),
 	}
 }
 
@@ -322,22 +321,12 @@ type natsEventIterator struct {
 	consumer jetstream.Consumer
 	ctx      context.Context
 	filter   EventFilter
-	buffer   []*Event
-	bufPos   int
 }
 
 func (it *natsEventIterator) Next(_ context.Context) (*Event, bool) {
-	// Return from buffer first.
-	if it.bufPos < len(it.buffer) {
-		ev := it.buffer[it.bufPos]
-		it.bufPos++
-		return ev, true
-	}
-	it.buffer = it.buffer[:0]
-	it.bufPos = 0
-
-	// Fetch next batch.
-	for i := 0; i < 100; i++ {
+	// Return the first matching event immediately. Prefetching a fixed batch
+	// can block on an incomplete batch and discard buffered events on error.
+	for {
 		msg, err := it.consumer.Next()
 		if err != nil {
 			return nil, false
@@ -347,15 +336,9 @@ func (it *natsEventIterator) Next(_ context.Context) (*Event, bool) {
 			continue
 		}
 		if it.filter.Matches(&ev) {
-			it.buffer = append(it.buffer, &ev)
+			return &ev, true
 		}
 	}
-	if len(it.buffer) == 0 {
-		return nil, false
-	}
-	ev := it.buffer[0]
-	it.bufPos = 1
-	return ev, true
 }
 
 func (it *natsEventIterator) Close() error {
